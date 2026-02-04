@@ -1,0 +1,59 @@
+# Default configuration for habituation/sensitization evolution simulation
+# Based on Todd & Miller "Exploring Adaptive Agency III"
+
+environment:
+  clump_scale: 10
+  sensory_accuracy: 0.75
+  lifespan: 1000
+  # Noise mode: "discrete" (binary flip) or "continuous" (gaussian)
+  noise_mode: "discrete"
+  # For continuous mode: standard deviation of Gaussian noise
+  noise_std: 0.5
+
+network:
+  # Weight configuration
+  num_weight_magnitudes: 16
+  max_weight: 4.1
+  weight_spacing: "linear"  # "linear" or "logarithmic"
+
+  # Input encoding (for discrete mode)
+  sweet_input: 1.0   # food smell
+  sour_input: -1.0   # poison smell
+
+  # Activation function: "tanh" or "scaled_sigmoid"
+  motor_activation: "tanh"
+
+learning:
+  # Hebbian learning configuration
+  enabled: true
+  rule: "basic"           # "basic", "oja", or "normalized"
+  learning_rate: 0.01
+
+fitness:
+  eat_food_reward: 1.0
+  eat_poison_penalty: -1.0
+  no_eat_cost: 0.0        # cost for not eating (starvation)
+  # Threshold for considering cluster-tracking evolved
+  # Expressed as fraction of theoretical optimal fitness
+  success_threshold_ratio: 0.7
+
+genetic:
+  population_size: 100
+  max_generations: 2000
+  mutation_rate: 0.01     # per bit
+  crossover_rate: 0.7
+  # Linear fitness scaling
+  scaling_enabled: true
+  scaling_target_max: 1.5  # target max as multiple of mean
+
+simulation:
+  seed: 42
+  num_runs: 5
+  # Whether to use JIT compilation for main loop
+  use_jit: true
+
+# Experimental grid (for full paper replication)
+experiment:
+  clump_scales: [1, 5, 10, 20, 40, 80]
+  sensory_accuracies: [0.55, 0.60, 0.70, 0.75, 0.80, 0.90, 0.95]
+  runs_per_condition: 5

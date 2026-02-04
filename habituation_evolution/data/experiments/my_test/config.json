@@ -1,0 +1,24 @@
+{
+  "clump_scales": [
+    1,
+    10,
+    40
+  ],
+  "sensory_accuracies": [
+    0.6,
+    0.75,
+    0.9
+  ],
+  "runs_per_condition": 2,
+  "population_size": 50,
+  "max_generations": 200,
+  "lifespan": 1000,
+  "mutation_rate": 0.01,
+  "crossover_rate": 0.7,
+  "run_lifespan_test": true,
+  "lifespan_test_lifespan": 4000,
+  "lifespan_test_runs": 2,
+  "history_sample_interval": 10,
+  "output_dir": "data/experiments",
+  "experiment_name": "my_test"
+}
