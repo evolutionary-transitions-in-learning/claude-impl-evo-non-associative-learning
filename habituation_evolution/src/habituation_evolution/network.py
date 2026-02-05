@@ -387,6 +387,11 @@ def apply_hebbian_learning(
         params.biases,
     )
 
+    # Clip weights to prevent explosion from unbounded Hebbian learning
+    clip = config.weight_clip
+    new_weights = jnp.clip(new_weights, -clip, clip)
+    new_biases = jnp.clip(new_biases, -clip, clip)
+
     return NetworkParams(
         weights=new_weights,
         biases=new_biases,

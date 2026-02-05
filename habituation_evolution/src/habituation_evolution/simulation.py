@@ -23,7 +23,7 @@ from .fitness import (
     compute_success_threshold,
     evaluate_population,
 )
-from .genetics import create_next_generation, create_random_population
+from .genetics import create_next_generation_with_elitism, create_random_population
 
 
 class SimulationState(NamedTuple):
@@ -150,8 +150,8 @@ def run_generation(state: SimulationState, config: SimulationConfig) -> Simulati
     """
     key_ga, key_eval, key_next = jax.random.split(state.key, 3)
 
-    # Create next generation
-    new_population = create_next_generation(
+    # Create next generation (with elitism to preserve best individual)
+    new_population = create_next_generation_with_elitism(
         key_ga, state.population, state.fitness_scores, config.genetic
     )
 
@@ -191,6 +191,7 @@ def run_simulation(
     key: PRNGKey,
     config: SimulationConfig,
     verbose: bool = True,
+    progress_callback: callable = None,
 ) -> SimulationResult:
     """Run full simulation until convergence or max generations.
 
@@ -200,6 +201,8 @@ def run_simulation(
         key: JAX random key
         config: Simulation configuration
         verbose: Whether to print progress
+        progress_callback: Optional callback(generation, max_generations, mean_fitness, best_fitness)
+            called after each generation for progress reporting
 
     Returns:
         SimulationResult with final state and history
@@ -223,15 +226,29 @@ def run_simulation(
         print(f"Initial mean fitness: {state.mean_fitness:.2f}")
         print("-" * 50)
 
-    # Evolution loop
-    while not state.converged and state.generation < config.genetic.max_generations:
-        state = run_generation(state, config)
+    # JIT compile the generation runner (config captured in closure as constants)
+    @jax.jit
+    def jit_run_generation(state):
+        return run_generation(state, config)
+
+    # Evolution loop - always run to max_generations to collect full fitness history
+    while state.generation < config.genetic.max_generations:
+        state = jit_run_generation(state)
 
         # Record history
         mean_fitness_history.append(float(state.mean_fitness))
         best_fitness_history.append(float(state.best_fitness))
         min_fitness_history.append(float(jnp.min(state.fitness_scores)))
         std_fitness_history.append(float(jnp.std(state.fitness_scores)))
+
+        # Call progress callback if provided
+        if progress_callback is not None:
+            progress_callback(
+                int(state.generation),
+                config.genetic.max_generations,
+                float(state.mean_fitness),
+                float(state.best_fitness),
+            )
 
         if verbose and (state.generation % 100 == 0 or state.converged):
             print(
@@ -249,9 +266,17 @@ def run_simulation(
         std_fitness=jnp.array(std_fitness_history),
     )
 
-    # Determine success
-    success = bool(state.converged)
-    generations = int(state.generation) if success else config.genetic.max_generations
+    # Determine success by scanning mean fitness history for first threshold crossing
+    threshold = compute_success_threshold(config)
+    mean_arr = jnp.array(mean_fitness_history)
+    crossed = mean_arr >= threshold
+    if jnp.any(crossed):
+        success = True
+        # Generation index = first index where mean crossed threshold
+        generations = int(jnp.argmax(crossed))
+    else:
+        success = False
+        generations = config.genetic.max_generations
 
     if verbose:
         print("-" * 50)

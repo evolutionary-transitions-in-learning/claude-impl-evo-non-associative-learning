@@ -400,8 +400,9 @@ def point_mutation(key: PRNGKey, genotype: Array, rate: float) -> Array:
 def apply_linear_scaling(fitness_scores: Array, target_max_ratio: float) -> Array:
     """Apply linear fitness scaling.
 
-    Scales fitness so that max fitness = target_max_ratio * mean fitness.
-    This helps maintain selection pressure throughout evolution.
+    First shifts fitness to be non-negative, then scales so that
+    max fitness = target_max_ratio * mean fitness. This ensures
+    correct selection pressure regardless of the raw fitness sign.
 
     Args:
         fitness_scores: Raw fitness scores
@@ -410,21 +411,18 @@ def apply_linear_scaling(fitness_scores: Array, target_max_ratio: float) -> Arra
     Returns:
         Scaled fitness scores (all non-negative)
     """
-    mean_f = jnp.mean(fitness_scores)
-    max_f = jnp.max(fitness_scores)
+    # First shift to non-negative so scaling math works correctly
     min_f = jnp.min(fitness_scores)
+    shifted = fitness_scores - min_f + 1e-8  # All positive now
+
+    mean_f = jnp.mean(shifted)
+    max_f = jnp.max(shifted)
 
     # Target: max' = target_max_ratio * mean'
-    # We want to map [min_f, max_f] to [min', max'] where mean' = mean_f (preserve mean)
-    # and max' = target_max_ratio * mean_f
-
     target_max = target_max_ratio * mean_f
 
     # Linear scaling: f' = a * f + b
     # Constraints: mean' = mean_f, max' = target_max
-    # This gives: a = (target_max - mean_f) / (max_f - mean_f) when max_f != mean_f
-
-    # Handle edge case where all fitness values are the same
     range_f = max_f - mean_f
     a = jnp.where(
         range_f > 1e-8,
@@ -433,9 +431,9 @@ def apply_linear_scaling(fitness_scores: Array, target_max_ratio: float) -> Arra
     )
     b = mean_f * (1.0 - a)
 
-    scaled = a * fitness_scores + b
+    scaled = a * shifted + b
 
-    # Ensure non-negative (shift if necessary)
+    # Ensure non-negative (safety check)
     min_scaled = jnp.min(scaled)
     scaled = jnp.where(min_scaled < 0, scaled - min_scaled, scaled)
 

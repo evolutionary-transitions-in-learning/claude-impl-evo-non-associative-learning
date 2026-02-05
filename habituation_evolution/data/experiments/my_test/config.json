@@ -1,15 +1,11 @@
 {
   "clump_scales": [
-    1,
-    10,
-    40
+    5
   ],
   "sensory_accuracies": [
-    0.6,
-    0.75,
-    0.9
+    0.95
   ],
-  "runs_per_condition": 2,
+  "runs_per_condition": 5,
   "population_size": 50,
   "max_generations": 200,
   "lifespan": 1000,

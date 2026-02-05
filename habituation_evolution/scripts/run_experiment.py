@@ -156,20 +156,28 @@ def run_single_condition(
     sim_config.genetic.crossover_rate = exp_config.crossover_rate
     sim_config.seed = seed
 
+    # Compute success threshold for progress display
+    threshold = compute_success_threshold(sim_config)
+
     if verbose:
         print(f"  Running: clump={clump_scale}, acc={sensory_accuracy:.0%}, "
-              f"life={lifespan}, run={run_id}")
+              f"life={lifespan}, run={run_id} (threshold={threshold:.1f})")
+
+    # Progress callback for generation updates
+    def progress_callback(gen, max_gen, mean_fit, best_fit):
+        if gen % 100 == 0 or gen == max_gen:  # Update every 100 generations
+            print(f"\r    Gen {gen:4d}/{max_gen} | mean={mean_fit:.1f} best={best_fit:.1f}", end="", flush=True)
 
     # Run simulation
-    result = run_simulation(key, sim_config, verbose=False)
+    result = run_simulation(
+        key, sim_config, verbose=False,
+        progress_callback=progress_callback if verbose else None
+    )
 
     runtime = time.time() - start_time
 
-    # Sample fitness history
-    history_gens = list(range(0, len(result.history.mean_fitness),
-                              exp_config.history_sample_interval))
-    if history_gens[-1] != len(result.history.mean_fitness) - 1:
-        history_gens.append(len(result.history.mean_fitness) - 1)
+    # Save full fitness history (every generation) for post-hoc threshold analysis
+    history_gens = list(range(len(result.history.mean_fitness)))
 
     # Decode best genotype
     best_genotype = result.final_state.best_genotype
@@ -269,8 +277,8 @@ def run_main_experiment(
         save_result(result, output_dir)
 
         if verbose:
-            status = "SUCCESS" if result.success else f"FAIL@{result.generations_to_success}"
-            print(f"    -> {status} in {result.runtime_seconds:.1f}s")
+            status = f"converged@gen{result.generations_to_success}" if result.success else "no convergence"
+            print(f"\n    -> {status} in {result.runtime_seconds:.1f}s")
 
     print(f"Main experiment complete. Results saved to {output_dir}")
 
@@ -320,8 +328,8 @@ def run_lifespan_test(
         save_result(result, output_dir)
 
         if verbose:
-            status = "SUCCESS" if result.success else f"FAIL@{result.generations_to_success}"
-            print(f"    -> {status} in {result.runtime_seconds:.1f}s")
+            status = f"converged@gen{result.generations_to_success}" if result.success else "no convergence"
+            print(f"\n    -> {status} in {result.runtime_seconds:.1f}s")
 
     print(f"Lifespan test complete. Results saved to {output_dir}")
 

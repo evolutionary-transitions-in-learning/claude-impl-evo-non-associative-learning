@@ -1,18 +1,20 @@
-"""Configuration dataclasses for the habituation/sensitization evolution simulation."""
+"""Configuration dataclasses for the ALICE threat discrimination simulation.
+
+This module defines all configuration parameters for:
+- Environment (threat sequences, lifetimes, clumping)
+- Pain channel (delay, magnitude)
+- Health dynamics (decay, eating, damage)
+- Neural network architecture
+- Hebbian learning
+- Genetic algorithm (tournament selection)
+- Top-level simulation orchestration
+"""
 
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Literal
 
 import yaml
-
-
-class NoiseMode(str, Enum):
-    """Sensory noise model selection."""
-
-    DISCRETE = "discrete"  # Binary flip with probability (1 - accuracy)
-    CONTINUOUS = "continuous"  # Gaussian noise added to continuous signal
 
 
 class WeightSpacing(str, Enum):
@@ -22,64 +24,89 @@ class WeightSpacing(str, Enum):
     LOGARITHMIC = "logarithmic"
 
 
-class MotorActivation(str, Enum):
-    """Motor unit activation function."""
-
-    TANH = "tanh"
-    SCALED_SIGMOID = "scaled_sigmoid"
-
-
 class HebbianRule(str, Enum):
     """Hebbian learning rule variant."""
 
-    BASIC = "basic"  # Δw = η * pre * post
-    OJA = "oja"  # Δw = η * post * (pre - post * w)
-    NORMALIZED = "normalized"  # Δw = η * pre * post / ||w||
+    BASIC = "basic"  # dw = eta * pre * post
+    OJA = "oja"  # dw = eta * post * (pre - post * w)
+    NORMALIZED = "normalized"  # dw = eta * pre * post / ||w||
 
 
 @dataclass
 class EnvironmentConfig:
-    """Configuration for the simulated environment."""
+    """Configuration for the simulated threat environment."""
 
     clump_scale: int = 10
-    sensory_accuracy: float = 0.75
-    lifespan: int = 1000
-    noise_mode: NoiseMode = NoiseMode.DISCRETE
-    # For continuous noise mode: standard deviation of Gaussian noise
-    noise_std: float = 0.5
+    phase1_lifetime: int = 500
+    phase2_lifetime: int = 1000
+    true_false_ratio: float = 0.5  # fraction of threats that are TRUE in phase 2
+    stimulus_magnitude: float = 1.0
+    num_stimulus_channels: int = 1
+    shared_environment: bool = True  # all creatures face same threats per generation
 
     def __post_init__(self):
-        if isinstance(self.noise_mode, str):
-            self.noise_mode = NoiseMode(self.noise_mode)
-        if not 0.5 <= self.sensory_accuracy <= 1.0:
-            raise ValueError(f"sensory_accuracy must be in [0.5, 1.0], got {self.sensory_accuracy}")
         if self.clump_scale < 1:
             raise ValueError(f"clump_scale must be >= 1, got {self.clump_scale}")
-        if self.lifespan < 1:
-            raise ValueError(f"lifespan must be >= 1, got {self.lifespan}")
+        if not 0.0 <= self.true_false_ratio <= 1.0:
+            raise ValueError(
+                f"true_false_ratio must be in [0, 1], got {self.true_false_ratio}"
+            )
+        if self.phase1_lifetime < 1:
+            raise ValueError(f"phase1_lifetime must be >= 1, got {self.phase1_lifetime}")
+        if self.phase2_lifetime < 1:
+            raise ValueError(f"phase2_lifetime must be >= 1, got {self.phase2_lifetime}")
+        if self.num_stimulus_channels < 1:
+            raise ValueError(
+                f"num_stimulus_channels must be >= 1, got {self.num_stimulus_channels}"
+            )
+
+
+@dataclass
+class PainConfig:
+    """Configuration for the pain channel."""
+
+    delay: int = 1  # timesteps before pain signal appears
+    magnitude: float = 1.0  # pain signal intensity
+
+    def __post_init__(self):
+        if self.delay < 1:
+            raise ValueError(f"pain delay must be >= 1, got {self.delay}")
+        if self.magnitude < 0:
+            raise ValueError(f"pain magnitude must be >= 0, got {self.magnitude}")
+
+
+@dataclass
+class HealthConfig:
+    """Configuration for health dynamics."""
+
+    starting_health: float = 20.0
+    passive_decay: float = 0.1  # health lost per timestep
+    eating_gain_rate: float = 1.0  # health gained per timestep at full eating (output=-1)
+    threat_damage: float = 5.0  # damage per timestep from unprotected true threat
+
+    def __post_init__(self):
+        if self.starting_health <= 0:
+            raise ValueError(f"starting_health must be > 0, got {self.starting_health}")
+        if self.passive_decay < 0:
+            raise ValueError(f"passive_decay must be >= 0, got {self.passive_decay}")
+        if self.eating_gain_rate < 0:
+            raise ValueError(f"eating_gain_rate must be >= 0, got {self.eating_gain_rate}")
+        if self.threat_damage < 0:
+            raise ValueError(f"threat_damage must be >= 0, got {self.threat_damage}")
 
 
 @dataclass
 class NetworkConfig:
     """Configuration for the neural network architecture."""
 
-    # Weight configuration
+    num_stimulus_channels: int = 1
     num_weight_magnitudes: int = 16
     max_weight: float = 4.1
     weight_spacing: WeightSpacing = WeightSpacing.LINEAR
 
-    # Input encoding (for discrete mode)
-    sweet_input: float = 1.0  # food smell
-    sour_input: float = -1.0  # poison smell
-
-    # Activation function
-    motor_activation: MotorActivation = MotorActivation.TANH
-
     def __post_init__(self):
         if isinstance(self.weight_spacing, str):
             self.weight_spacing = WeightSpacing(self.weight_spacing)
-        if isinstance(self.motor_activation, str):
-            self.motor_activation = MotorActivation(self.motor_activation)
 
     def get_weight_magnitudes(self):
         """Return array of possible weight magnitudes."""
@@ -89,9 +116,29 @@ class NetworkConfig:
         if self.weight_spacing == WeightSpacing.LINEAR:
             return jnp.linspace(0.0, self.max_weight, n)
         else:  # LOGARITHMIC
-            # Use log spacing, but include 0 explicitly
             magnitudes = jnp.logspace(-2, jnp.log10(self.max_weight), n - 1)
             return jnp.concatenate([jnp.array([0.0]), magnitudes])
+
+    @property
+    def num_neurons(self) -> int:
+        """Total neurons: N stimulus + 1 pain + 1 output."""
+        return self.num_stimulus_channels + 2
+
+    @property
+    def num_connections(self) -> int:
+        """Full connectivity: n^2 directed connections."""
+        n = self.num_neurons
+        return n * n
+
+    @property
+    def num_biases(self) -> int:
+        """One bias per neuron."""
+        return self.num_neurons
+
+    @property
+    def num_params(self) -> int:
+        """Total parameters (connections + biases)."""
+        return self.num_connections + self.num_biases
 
 
 @dataclass
@@ -101,22 +148,11 @@ class LearningConfig:
     enabled: bool = True
     rule: HebbianRule = HebbianRule.BASIC
     learning_rate: float = 0.01
-    weight_clip: float = 4.1  # Clip weights to [-clip, clip] to prevent explosion
+    weight_clip: float = 4.1
 
     def __post_init__(self):
         if isinstance(self.rule, str):
             self.rule = HebbianRule(self.rule)
-
-
-@dataclass
-class FitnessConfig:
-    """Configuration for fitness evaluation."""
-
-    eat_food_reward: float = 1.0
-    eat_poison_penalty: float = -1.0
-    no_eat_cost: float = 0.0
-    # Threshold for considering cluster-tracking evolved
-    success_threshold_ratio: float = 0.7
 
 
 @dataclass
@@ -127,26 +163,14 @@ class GeneticConfig:
     max_generations: int = 2000
     mutation_rate: float = 0.01  # per bit
     crossover_rate: float = 0.7
-    # Linear fitness scaling
-    scaling_enabled: bool = True
-    scaling_target_max: float = 1.5  # target max as multiple of mean
 
     def __post_init__(self):
         if not 0.0 <= self.mutation_rate <= 1.0:
             raise ValueError(f"mutation_rate must be in [0, 1], got {self.mutation_rate}")
         if not 0.0 <= self.crossover_rate <= 1.0:
             raise ValueError(f"crossover_rate must be in [0, 1], got {self.crossover_rate}")
-
-
-@dataclass
-class ExperimentConfig:
-    """Configuration for running the full experimental grid."""
-
-    clump_scales: list[int] = field(default_factory=lambda: [1, 5, 10, 20, 40, 80])
-    sensory_accuracies: list[float] = field(
-        default_factory=lambda: [0.55, 0.60, 0.70, 0.75, 0.80, 0.90, 0.95]
-    )
-    runs_per_condition: int = 5
+        if self.population_size < 2:
+            raise ValueError(f"population_size must be >= 2, got {self.population_size}")
 
 
 @dataclass
@@ -155,13 +179,12 @@ class SimulationConfig:
 
     environment: EnvironmentConfig = field(default_factory=EnvironmentConfig)
     network: NetworkConfig = field(default_factory=NetworkConfig)
+    pain: PainConfig = field(default_factory=PainConfig)
+    health: HealthConfig = field(default_factory=HealthConfig)
     learning: LearningConfig = field(default_factory=LearningConfig)
-    fitness: FitnessConfig = field(default_factory=FitnessConfig)
     genetic: GeneticConfig = field(default_factory=GeneticConfig)
-    experiment: ExperimentConfig = field(default_factory=ExperimentConfig)
     seed: int = 42
     num_runs: int = 5
-    use_jit: bool = True
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "SimulationConfig":
@@ -176,13 +199,12 @@ class SimulationConfig:
         return cls(
             environment=EnvironmentConfig(**data.get("environment", {})),
             network=NetworkConfig(**data.get("network", {})),
+            pain=PainConfig(**data.get("pain", {})),
+            health=HealthConfig(**data.get("health", {})),
             learning=LearningConfig(**data.get("learning", {})),
-            fitness=FitnessConfig(**data.get("fitness", {})),
             genetic=GeneticConfig(**data.get("genetic", {})),
-            experiment=ExperimentConfig(**data.get("experiment", {})),
             seed=data.get("simulation", {}).get("seed", 42),
             num_runs=data.get("simulation", {}).get("num_runs", 5),
-            use_jit=data.get("simulation", {}).get("use_jit", True),
         )
 
     def to_dict(self) -> dict:
@@ -190,47 +212,44 @@ class SimulationConfig:
         return {
             "environment": {
                 "clump_scale": self.environment.clump_scale,
-                "sensory_accuracy": self.environment.sensory_accuracy,
-                "lifespan": self.environment.lifespan,
-                "noise_mode": self.environment.noise_mode.value,
-                "noise_std": self.environment.noise_std,
+                "phase1_lifetime": self.environment.phase1_lifetime,
+                "phase2_lifetime": self.environment.phase2_lifetime,
+                "true_false_ratio": self.environment.true_false_ratio,
+                "stimulus_magnitude": self.environment.stimulus_magnitude,
+                "num_stimulus_channels": self.environment.num_stimulus_channels,
+                "shared_environment": self.environment.shared_environment,
             },
             "network": {
+                "num_stimulus_channels": self.network.num_stimulus_channels,
                 "num_weight_magnitudes": self.network.num_weight_magnitudes,
                 "max_weight": self.network.max_weight,
                 "weight_spacing": self.network.weight_spacing.value,
-                "sweet_input": self.network.sweet_input,
-                "sour_input": self.network.sour_input,
-                "motor_activation": self.network.motor_activation.value,
+            },
+            "pain": {
+                "delay": self.pain.delay,
+                "magnitude": self.pain.magnitude,
+            },
+            "health": {
+                "starting_health": self.health.starting_health,
+                "passive_decay": self.health.passive_decay,
+                "eating_gain_rate": self.health.eating_gain_rate,
+                "threat_damage": self.health.threat_damage,
             },
             "learning": {
                 "enabled": self.learning.enabled,
                 "rule": self.learning.rule.value,
                 "learning_rate": self.learning.learning_rate,
-            },
-            "fitness": {
-                "eat_food_reward": self.fitness.eat_food_reward,
-                "eat_poison_penalty": self.fitness.eat_poison_penalty,
-                "no_eat_cost": self.fitness.no_eat_cost,
-                "success_threshold_ratio": self.fitness.success_threshold_ratio,
+                "weight_clip": self.learning.weight_clip,
             },
             "genetic": {
                 "population_size": self.genetic.population_size,
                 "max_generations": self.genetic.max_generations,
                 "mutation_rate": self.genetic.mutation_rate,
                 "crossover_rate": self.genetic.crossover_rate,
-                "scaling_enabled": self.genetic.scaling_enabled,
-                "scaling_target_max": self.genetic.scaling_target_max,
-            },
-            "experiment": {
-                "clump_scales": self.experiment.clump_scales,
-                "sensory_accuracies": self.experiment.sensory_accuracies,
-                "runs_per_condition": self.experiment.runs_per_condition,
             },
             "simulation": {
                 "seed": self.seed,
                 "num_runs": self.num_runs,
-                "use_jit": self.use_jit,
             },
         }
 
@@ -240,7 +259,10 @@ class SimulationConfig:
             yaml.dump(self.to_dict(), f, default_flow_style=False, sort_keys=False)
 
     def with_updates(self, **kwargs) -> "SimulationConfig":
-        """Create a new config with updated values."""
+        """Create a new config with updated values.
+
+        Supports dotted notation: with_updates(**{"environment.clump_scale": 20})
+        """
         import copy
 
         new_config = copy.deepcopy(self)
@@ -248,7 +270,6 @@ class SimulationConfig:
             if hasattr(new_config, key):
                 setattr(new_config, key, value)
             elif "." in key:
-                # Handle nested updates like "environment.clump_scale"
                 parts = key.split(".")
                 obj = new_config
                 for part in parts[:-1]:

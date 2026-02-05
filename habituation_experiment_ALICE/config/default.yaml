@@ -1,0 +1,40 @@
+environment:
+  clump_scale: 10
+  phase1_lifetime: 500
+  phase2_lifetime: 1000
+  true_false_ratio: 0.5
+  stimulus_magnitude: 1.0
+  num_stimulus_channels: 1
+  shared_environment: true  # all creatures face same threats per generation
+
+network:
+  num_stimulus_channels: 1
+  num_weight_magnitudes: 16
+  max_weight: 4.1
+  weight_spacing: linear
+
+pain:
+  delay: 2
+  magnitude: 1.0
+
+health:
+  starting_health: 20.0
+  passive_decay: 0.2
+  eating_gain_rate: 1.0
+  threat_damage: 5.0
+
+learning:
+  enabled: true
+  rule: basic
+  learning_rate: 0.01
+  weight_clip: 4.1
+
+genetic:
+  population_size: 100
+  max_generations: 2000
+  mutation_rate: 0.05
+  crossover_rate: 0.7
+
+simulation:
+  seed: 99
+  num_runs: 2
