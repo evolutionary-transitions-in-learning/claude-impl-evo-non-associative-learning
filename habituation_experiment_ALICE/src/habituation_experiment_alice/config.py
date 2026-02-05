@@ -24,6 +24,20 @@ class WeightSpacing(str, Enum):
     LOGARITHMIC = "logarithmic"
 
 
+class NetworkMode(str, Enum):
+    """Neural network dynamics model."""
+
+    SIMPLE = "simple"  # Current feedforward-with-recurrence model
+    CTRNN = "ctrnn"  # Continuous-time recurrent neural network
+
+
+class GenotypeMode(str, Enum):
+    """Genotype representation mode."""
+
+    BINARY = "binary"  # Original 81-bit binary encoding
+    CONTINUOUS = "continuous"  # Float array with Gaussian mutation
+
+
 class HebbianRule(str, Enum):
     """Hebbian learning rule variant."""
 
@@ -103,10 +117,16 @@ class NetworkConfig:
     num_weight_magnitudes: int = 16
     max_weight: float = 4.1
     weight_spacing: WeightSpacing = WeightSpacing.LINEAR
+    network_mode: NetworkMode = NetworkMode.SIMPLE
+    tau_min: float = 0.5  # min time constant (CTRNN only)
+    tau_max: float = 10.0  # max time constant (CTRNN only)
+    num_tau_levels: int = 32  # discrete levels for binary encoding (CTRNN only)
 
     def __post_init__(self):
         if isinstance(self.weight_spacing, str):
             self.weight_spacing = WeightSpacing(self.weight_spacing)
+        if isinstance(self.network_mode, str):
+            self.network_mode = NetworkMode(self.network_mode)
 
     def get_weight_magnitudes(self):
         """Return array of possible weight magnitudes."""
@@ -161,16 +181,23 @@ class GeneticConfig:
 
     population_size: int = 100
     max_generations: int = 2000
-    mutation_rate: float = 0.01  # per bit
+    mutation_rate: float = 0.01  # per bit (binary) or per gene (continuous)
     crossover_rate: float = 0.7
+    tournament_size: int = 2
+    genotype_mode: GenotypeMode = GenotypeMode.BINARY
+    mutation_std: float = 0.1  # Gaussian noise std (continuous mode only)
 
     def __post_init__(self):
+        if isinstance(self.genotype_mode, str):
+            self.genotype_mode = GenotypeMode(self.genotype_mode)
         if not 0.0 <= self.mutation_rate <= 1.0:
             raise ValueError(f"mutation_rate must be in [0, 1], got {self.mutation_rate}")
         if not 0.0 <= self.crossover_rate <= 1.0:
             raise ValueError(f"crossover_rate must be in [0, 1], got {self.crossover_rate}")
         if self.population_size < 2:
             raise ValueError(f"population_size must be >= 2, got {self.population_size}")
+        if self.tournament_size < 2:
+            raise ValueError(f"tournament_size must be >= 2, got {self.tournament_size}")
 
 
 @dataclass
@@ -224,6 +251,10 @@ class SimulationConfig:
                 "num_weight_magnitudes": self.network.num_weight_magnitudes,
                 "max_weight": self.network.max_weight,
                 "weight_spacing": self.network.weight_spacing.value,
+                "network_mode": self.network.network_mode.value,
+                "tau_min": self.network.tau_min,
+                "tau_max": self.network.tau_max,
+                "num_tau_levels": self.network.num_tau_levels,
             },
             "pain": {
                 "delay": self.pain.delay,
@@ -246,6 +277,9 @@ class SimulationConfig:
                 "max_generations": self.genetic.max_generations,
                 "mutation_rate": self.genetic.mutation_rate,
                 "crossover_rate": self.genetic.crossover_rate,
+                "tournament_size": self.genetic.tournament_size,
+                "genotype_mode": self.genetic.genotype_mode.value,
+                "mutation_std": self.genetic.mutation_std,
             },
             "simulation": {
                 "seed": self.seed,

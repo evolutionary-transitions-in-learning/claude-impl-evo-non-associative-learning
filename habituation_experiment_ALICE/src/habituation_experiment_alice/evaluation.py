@@ -20,15 +20,22 @@ import jax.numpy as jnp
 from jax import Array
 from jax.random import PRNGKey
 
-from .config import SimulationConfig
+from .config import GenotypeMode, SimulationConfig
 from .environment import (
     PhaseEnvironment,
     generate_phase1_environment,
     generate_phase2_environment,
 )
-from .genetics import decode_genotype
+from .genetics import decode_continuous_genotype, decode_genotype
 from .health import HealthResult, simulate_health
 from .network import NetworkParams, run_network_phase
+
+
+def _decode_genotype_dispatch(genotype: Array, config: SimulationConfig) -> NetworkParams:
+    """Decode genotype using the appropriate method based on genotype mode."""
+    if config.genetic.genotype_mode == GenotypeMode.CONTINUOUS:
+        return decode_continuous_genotype(genotype, config.network)
+    return decode_genotype(genotype, config.network)
 
 
 class PhaseResult(NamedTuple):
@@ -84,6 +91,10 @@ class AgentTrace(NamedTuple):
     weights_after_phase2: Array
     biases_after_phase2: Array
     learnable_mask: Array
+    # Time constants (CTRNN only; ones for SIMPLE mode)
+    time_constants_initial: Array
+    time_constants_after_phase1: Array
+    time_constants_after_phase2: Array
     # Summary
     fitness: Array
     survived_phase1: Array
@@ -153,7 +164,7 @@ def evaluate_creature(
         EvaluationResult with fitness and phase details
     """
     # Decode genotype to network parameters
-    params = decode_genotype(genotype, config.network)
+    params = _decode_genotype_dispatch(genotype, config)
 
     # Phase 1: survival test
     phase1 = evaluate_phase(params, phase1_env, config)
@@ -274,7 +285,7 @@ def evaluate_agent_detailed(
     phase1_env = generate_phase1_environment(key_p1, config)
     phase2_env = generate_phase2_environment(key_p2, config)
 
-    params = decode_genotype(genotype, config.network)
+    params = _decode_genotype_dispatch(genotype, config)
 
     # Phase 1
     s1 = phase1_env.stimulus_signal[:, 0]
@@ -324,6 +335,9 @@ def evaluate_agent_detailed(
         weights_after_phase2=params_after_p2.weights,
         biases_after_phase2=params_after_p2.biases,
         learnable_mask=params.learnable_mask,
+        time_constants_initial=params.time_constants,
+        time_constants_after_phase1=params_after_p1.time_constants,
+        time_constants_after_phase2=params_after_p2.time_constants,
         fitness=fitness,
         survived_phase1=survived_p1,
     )

@@ -17,7 +17,21 @@ Each network parameter encoded as bits in a flat integer array:
 - Bits 1-4: magnitude index
 - Bit 5: learnable flag
 
+**Time constant (5 bits, CTRNN mode only):**
+- 32 levels linearly mapped to `[tau_min, tau_max]`
+
 Weight magnitudes: 16 linearly-spaced values from 0.0 to 4.1.
+
+## Continuous Genotype Encoding (ALICE only)
+
+Float array with direct parameter values:
+
+**Layout:** `[weights, biases, learnable_values, (time_constants if CTRNN)]`
+- Weights/biases: float values clipped to `[-max_weight, max_weight]`
+- Learnable values: thresholded at 0.5 to produce boolean mask
+- Time constants (CTRNN): float values clipped to `[tau_min, tau_max]`
+
+Sizes for N=1: SIMPLE = 24 floats, CTRNN = 27 floats.
 
 ## Hebbian Learning (within lifetime)
 
@@ -35,12 +49,18 @@ Weights clipped to [-4.1, 4.1] after each update.
 - **`@jax.jit`** on the generation runner for speed
 - **Pure functional** — no mutation, all state passed explicitly
 - **NamedTuples** for all data structures (JIT-compatible)
+- **Python-level dispatch** via `if/else` on config enums in JIT closures (traced at compile time)
 
 ## Genetic Operators
 
+### Binary mode
 - **Two-point crossover**: swap middle segment between two parents
 - **Point mutation**: per-bit flip with configurable rate (default 0.01)
 - Both operate on raw bit arrays (shape-agnostic)
+
+### Continuous mode (ALICE only)
+- **Uniform crossover**: each gene independently selected from either parent (p=0.5)
+- **Gaussian mutation**: perturb each gene with probability `mutation_rate` by adding N(0, `mutation_std`) noise, then clip to valid ranges
 
 ## Configuration
 

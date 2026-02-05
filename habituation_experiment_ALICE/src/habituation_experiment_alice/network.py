@@ -8,6 +8,10 @@ The network consists of N+2 neurons (for N stimulus channels):
 For the default N=1 case, there are 3 neurons with full connectivity
 (9 weights + 3 biases = 12 parameters).
 
+Two network modes are supported:
+- SIMPLE: Feedforward with recurrence (original model)
+- CTRNN: Continuous-time recurrent neural network with time constants
+
 Output interpretation:
   +1 = full withdrawal (max protection, no eating)
   -1 = full eating (max health gain, no protection)
@@ -20,7 +24,7 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
-from .config import HebbianRule, LearningConfig, NetworkConfig
+from .config import HebbianRule, LearningConfig, NetworkConfig, NetworkMode
 
 
 # ============================================================================
@@ -29,17 +33,19 @@ from .config import HebbianRule, LearningConfig, NetworkConfig
 
 
 class NetworkParams(NamedTuple):
-    """Network parameters (weights and biases).
+    """Network parameters (weights, biases, and time constants).
 
     For N=1 (3 neurons):
         weights: shape (9,) - full connectivity
         biases: shape (3,) - one per neuron
         learnable_mask: shape (12,) - which params are learnable (9 weights + 3 biases)
+        time_constants: shape (3,) - per-neuron time constants (CTRNN only; ones for SIMPLE)
     """
 
     weights: Array
     biases: Array
     learnable_mask: Array
+    time_constants: Array
 
 
 class NetworkState(NamedTuple):
@@ -97,6 +103,10 @@ CONNECTION_MAP = [
     (NEURON_PAIN, NEURON_STIM),     # 8: P -> S
 ]
 
+# Precomputed index arrays for CTRNN weight matrix construction
+_SRC_INDICES = jnp.array([src for src, _ in CONNECTION_MAP])
+_TGT_INDICES = jnp.array([tgt for _, tgt in CONNECTION_MAP])
+
 
 # ============================================================================
 # Network Initialization
@@ -112,6 +122,7 @@ def init_network_params(
     weights: Array | None = None,
     biases: Array | None = None,
     learnable_mask: Array | None = None,
+    time_constants: Array | None = None,
     num_connections: int = NUM_CONNECTIONS_N1,
     num_neurons: int = NUM_NEURONS_N1,
 ) -> NetworkParams:
@@ -122,12 +133,19 @@ def init_network_params(
         biases = jnp.zeros(num_neurons)
     if learnable_mask is None:
         learnable_mask = jnp.zeros(num_connections + num_neurons, dtype=jnp.bool_)
+    if time_constants is None:
+        time_constants = jnp.ones(num_neurons)
 
-    return NetworkParams(weights=weights, biases=biases, learnable_mask=learnable_mask)
+    return NetworkParams(
+        weights=weights,
+        biases=biases,
+        learnable_mask=learnable_mask,
+        time_constants=time_constants,
+    )
 
 
 # ============================================================================
-# Network Forward Pass (N=1 specialization)
+# Network Forward Pass — SIMPLE mode (N=1 specialization)
 # ============================================================================
 
 
@@ -137,7 +155,7 @@ def network_step(
     pain_input: Array,
     params: NetworkParams,
 ) -> tuple[NetworkState, Array]:
-    """Execute single timestep of network update.
+    """Execute single timestep of network update (SIMPLE mode).
 
     Update order:
     1. Compute input neurons (stimulus, pain) from external inputs + recurrent + bias
@@ -192,6 +210,63 @@ def network_step(
     )
 
     return new_state, new_o
+
+
+# ============================================================================
+# Network Forward Pass — CTRNN mode
+# ============================================================================
+
+
+def ctrnn_network_step(
+    state: NetworkState,
+    stimulus_input: Array,
+    pain_input: Array,
+    params: NetworkParams,
+) -> tuple[NetworkState, Array]:
+    """Execute single CTRNN timestep.
+
+    CTRNN dynamics (Euler discretization, dt=1):
+        x_i(t+1) = x_i(t) + (1/tau_i) * (-x_i(t) + sum_j w_ij * tanh(x_j(t)) + I_i(t) + b_i)
+        output = tanh(x_output(t+1))
+
+    Here x_i is the internal state (membrane potential) of neuron i,
+    and tanh(x_j) is the output/activation of neuron j.
+
+    Args:
+        state: Current network state (internal states x)
+        stimulus_input: External stimulus input (scalar for N=1)
+        pain_input: External pain input (scalar)
+        params: Network parameters (including time_constants)
+
+    Returns:
+        Tuple of (new_state, output_value in [-1, +1])
+    """
+    x = state.activations  # internal states (3,)
+    tau = params.time_constants  # (3,)
+    w = params.weights  # (9,)
+    b = params.biases  # (3,)
+
+    # Build weight matrix (3x3) from flat weights
+    W = jnp.zeros((NUM_NEURONS_N1, NUM_NEURONS_N1)).at[
+        _TGT_INDICES, _SRC_INDICES
+    ].set(w)
+
+    # External inputs (only stimulus and pain neurons receive external input)
+    I = jnp.array([stimulus_input, pain_input, 0.0])
+
+    # Activated outputs from current internal state
+    activated = jnp.tanh(x)
+
+    # CTRNN dynamics: dx = (1/tau) * (-x + W @ activated + I + b)
+    input_sum = W @ activated + I + b
+    dx = (1.0 / tau) * (-x + input_sum)
+    new_x = x + dx
+
+    # Motor output is tanh of output neuron's internal state
+    output = jnp.tanh(new_x[NEURON_OUTPUT])
+
+    new_state = NetworkState(activations=new_x)
+    return new_state, output
 
 
 # ============================================================================
@@ -288,6 +363,7 @@ def apply_hebbian_learning(
         weights=new_weights,
         biases=new_biases,
         learnable_mask=params.learnable_mask,
+        time_constants=params.time_constants,
     )
 
 
@@ -305,6 +381,8 @@ def run_network_phase(
 ) -> tuple[Array, NetworkParams]:
     """Run network over an entire evaluation phase using lax.scan.
 
+    Dispatches to SIMPLE or CTRNN step function based on net_config.network_mode.
+
     Args:
         params: Initial network parameters
         stimulus_inputs: Stimulus input sequence, shape (lifetime,) for N=1
@@ -317,13 +395,18 @@ def run_network_phase(
         - outputs: Motor outputs for each timestep, shape (lifetime,)
         - final_params: Network parameters after learning
     """
+    # Select step function based on network mode
+    if net_config.network_mode == NetworkMode.CTRNN:
+        step_function = ctrnn_network_step
+    else:
+        step_function = network_step
 
     def step_fn(carry, inputs):
         state, params = carry
         stimulus, pain = inputs
 
         # Network forward pass
-        new_state, output = network_step(state, stimulus, pain, params)
+        new_state, output = step_function(state, stimulus, pain, params)
 
         # Apply Hebbian learning
         new_params = apply_hebbian_learning(new_state, params, learn_config)

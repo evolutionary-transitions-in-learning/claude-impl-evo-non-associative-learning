@@ -12,6 +12,10 @@ network:
   num_weight_magnitudes: 16
   max_weight: 4.1
   weight_spacing: linear
+  network_mode: simple
+  tau_min: 0.5
+  tau_max: 10.0
+  num_tau_levels: 32
 
 pain:
   delay: 2
@@ -34,6 +38,9 @@ genetic:
   max_generations: 2000
   mutation_rate: 0.05
   crossover_rate: 0.7
+  tournament_size: 2
+  genotype_mode: binary
+  mutation_std: 0.1  # Gaussian noise std (continuous mode only)
 
 simulation:
   seed: 99

@@ -93,9 +93,10 @@ def plot_run_comparison(summary, viz_dir, **kwargs) -> Path | None:
 
 
 def plot_fitness_sensitivity(experiment_dir, summary, viz_dir, **kwargs) -> Path | None:
-    """Plot single-bit fitness sensitivity analysis for the best genotype.
+    """Plot fitness sensitivity analysis for the best genotype.
 
-    For each bit in the best genotype, flip it and measure fitness change.
+    For binary genotypes: flip each bit and measure fitness change.
+    For continuous genotypes: perturb each gene by +/- epsilon and measure fitness change.
     Uses the best agent across all runs. Computed at visualization time (requires JAX).
     """
     try:
@@ -114,60 +115,83 @@ def plot_fitness_sensitivity(experiment_dir, summary, viz_dir, **kwargs) -> Path
     if not config_path.exists():
         return None
 
-    from habituation_experiment_alice.config import SimulationConfig
+    from habituation_experiment_alice.config import GenotypeMode, SimulationConfig
     from habituation_experiment_alice.evaluation import evaluate_agent_detailed
 
     config = SimulationConfig.from_yaml(config_path)
+    is_continuous = config.genetic.genotype_mode == GenotypeMode.CONTINUOUS
 
     # Evaluate original
     key = jax.random.PRNGKey(42)
     original_trace = evaluate_agent_detailed(genotype, key, config)
     original_fitness = float(original_trace.fitness)
 
-    # Evaluate each single-bit flip
     geno_len = len(genotype)
     deltas = np.zeros(geno_len)
 
-    for bit_idx in range(geno_len):
-        mutant = genotype.at[bit_idx].set(1 - genotype[bit_idx])
-        mutant_trace = evaluate_agent_detailed(mutant, key, config)
-        deltas[bit_idx] = float(mutant_trace.fitness) - original_fitness
+    if is_continuous:
+        # Continuous: perturb each gene by small epsilon
+        epsilon = 0.1
+        for idx in range(geno_len):
+            mutant_plus = genotype.at[idx].set(genotype[idx] + epsilon)
+            mutant_minus = genotype.at[idx].set(genotype[idx] - epsilon)
+            fit_plus = float(evaluate_agent_detailed(mutant_plus, key, config).fitness)
+            fit_minus = float(evaluate_agent_detailed(mutant_minus, key, config).fitness)
+            deltas[idx] = (fit_plus - fit_minus) / (2 * epsilon)
+    else:
+        # Binary: flip each bit
+        for bit_idx in range(geno_len):
+            mutant = genotype.at[bit_idx].set(1 - genotype[bit_idx])
+            mutant_trace = evaluate_agent_detailed(mutant, key, config)
+            deltas[bit_idx] = float(mutant_trace.fitness) - original_fitness
 
     # Plot
     fig, axes = plt.subplots(2, 1, figsize=(16, 8))
 
-    # Top: bar chart of all bit sensitivities
+    # Top: bar chart of all sensitivities
     ax = axes[0]
     colors = np.where(deltas >= 0, "mediumseagreen", "coral")
     ax.bar(range(geno_len), deltas, color=colors, edgecolor="none", alpha=0.8)
-    ax.set_xlabel("Bit Index")
-    ax.set_ylabel("Fitness Change")
-    ax.set_title(f"Single-Bit Fitness Sensitivity (best agent from run {best_run}, fitness={original_fitness:.2f})")
+    xlabel = "Gene Index" if is_continuous else "Bit Index"
+    ylabel = "dFitness/dGene" if is_continuous else "Fitness Change"
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    mode_label = "continuous" if is_continuous else "binary"
+    ax.set_title(f"Fitness Sensitivity ({mode_label}, best agent run {best_run}, fitness={original_fitness:.2f})")
     ax.grid(True, alpha=0.3, axis="y")
     ax.axhline(y=0, color="gray", linestyle="-", alpha=0.5)
 
-    # Add connection/bias region annotations
-    from habituation_experiment_alice.genetics import BITS_PER_CONNECTION, BITS_PER_BIAS
-    num_conns = config.network.num_connections
-    num_biases = config.network.num_biases
+    if not is_continuous:
+        # Add connection/bias region annotations for binary genotypes
+        from habituation_experiment_alice.genetics import BITS_PER_BIAS, BITS_PER_CONNECTION
+        num_conns = config.network.num_connections
+        num_biases = config.network.num_biases
 
-    offset = 0
-    for i in range(num_conns):
-        mid = offset + BITS_PER_CONNECTION / 2
-        if i % 2 == 0:
-            ax.axvspan(offset, offset + BITS_PER_CONNECTION, alpha=0.05, color="blue")
-        offset += BITS_PER_CONNECTION
-    for i in range(num_biases):
-        if i % 2 == 0:
-            ax.axvspan(offset, offset + BITS_PER_BIAS, alpha=0.05, color="orange")
-        offset += BITS_PER_BIAS
+        offset = 0
+        for i in range(num_conns):
+            if i % 2 == 0:
+                ax.axvspan(offset, offset + BITS_PER_CONNECTION, alpha=0.05, color="blue")
+            offset += BITS_PER_CONNECTION
+        for i in range(num_biases):
+            if i % 2 == 0:
+                ax.axvspan(offset, offset + BITS_PER_BIAS, alpha=0.05, color="orange")
+            offset += BITS_PER_BIAS
+    else:
+        # Add region annotations for continuous genotypes
+        num_conns = config.network.num_connections
+        num_biases = config.network.num_biases
+        num_params = config.network.num_params
+        ax.axvspan(0, num_conns, alpha=0.05, color="blue", label="weights")
+        ax.axvspan(num_conns, num_conns + num_biases, alpha=0.05, color="orange", label="biases")
+        ax.axvspan(num_conns + num_biases, num_conns + num_biases + num_params,
+                   alpha=0.05, color="green", label="learnable")
 
     # Bottom: sorted absolute sensitivity
     ax = axes[1]
     sorted_idx = np.argsort(np.abs(deltas))[::-1]
     ax.bar(range(geno_len), np.abs(deltas[sorted_idx]), color="steelblue", alpha=0.7)
     ax.set_xlabel("Rank (most sensitive first)")
-    ax.set_ylabel("|Fitness Change|")
+    ax.set_ylabel(f"|{ylabel}|")
     ax.set_title("Sorted Absolute Sensitivity")
     ax.grid(True, alpha=0.3, axis="y")
 
@@ -181,7 +205,7 @@ def plot_fitness_sensitivity(experiment_dir, summary, viz_dir, **kwargs) -> Path
 def _run_ablation_analysis(experiment_dir, summary):
     """Run ablation analysis: evaluate original + each parameter zeroed out.
 
-    Uses the best agent across all runs.
+    Uses the best agent across all runs. Supports both binary and continuous genotypes.
 
     Returns None if data is unavailable, otherwise returns:
         (original_trace, ablated_traces, config, best_run) where ablated_traces
@@ -200,9 +224,9 @@ def _run_ablation_analysis(experiment_dir, summary):
     if not config_path.exists():
         return None
 
-    from habituation_experiment_alice.config import SimulationConfig
+    from habituation_experiment_alice.config import GenotypeMode, SimulationConfig
     from habituation_experiment_alice.evaluation import evaluate_agent_detailed
-    from habituation_experiment_alice.genetics import BITS_PER_CONNECTION, BITS_PER_BIAS
+    from habituation_experiment_alice.genetics import BITS_PER_BIAS, BITS_PER_CONNECTION
 
     config = SimulationConfig.from_yaml(config_path)
     num_conns = config.network.num_connections
@@ -213,16 +237,25 @@ def _run_ablation_analysis(experiment_dir, summary):
 
     ablated_traces = []
 
-    for i in range(num_conns):
-        mutant = genotype.at[i * BITS_PER_CONNECTION].set(0)
-        ablated_traces.append(evaluate_agent_detailed(mutant, key, config))
-
-    for i in range(num_biases):
-        mutant = genotype.copy()
-        bit_start = num_conns * BITS_PER_CONNECTION + i * BITS_PER_BIAS
-        for b in range(BITS_PER_BIAS):
-            mutant = mutant.at[bit_start + b].set(0)
-        ablated_traces.append(evaluate_agent_detailed(mutant, key, config))
+    if config.genetic.genotype_mode == GenotypeMode.CONTINUOUS:
+        # Continuous mode: zero out each weight directly, then each bias
+        for i in range(num_conns):
+            mutant = genotype.at[i].set(0.0)
+            ablated_traces.append(evaluate_agent_detailed(mutant, key, config))
+        for i in range(num_biases):
+            mutant = genotype.at[num_conns + i].set(0.0)
+            ablated_traces.append(evaluate_agent_detailed(mutant, key, config))
+    else:
+        # Binary mode: zero presence bit for connections, zero all bits for biases
+        for i in range(num_conns):
+            mutant = genotype.at[i * BITS_PER_CONNECTION].set(0)
+            ablated_traces.append(evaluate_agent_detailed(mutant, key, config))
+        for i in range(num_biases):
+            mutant = genotype.copy()
+            bit_start = num_conns * BITS_PER_CONNECTION + i * BITS_PER_BIAS
+            for b in range(BITS_PER_BIAS):
+                mutant = mutant.at[bit_start + b].set(0)
+            ablated_traces.append(evaluate_agent_detailed(mutant, key, config))
 
     return original_trace, ablated_traces, config, best_run
 

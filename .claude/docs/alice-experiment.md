@@ -13,7 +13,36 @@ Full connectivity (9 weights + 3 biases = 12 parameters)
 
 All 9 directed connections exist (including cross-input S↔P, self-recurrent, recurrent O→S/P). Input neurons use linear activation; output uses tanh.
 
-**81-bit genotype** (9 connections × 7 bits + 3 biases × 6 bits).
+### Network Modes (`network_mode`)
+
+**SIMPLE** (default): Feedforward-with-recurrence. Each timestep:
+```
+activation[i] = sum(w[j→i] * input[j]) + bias[i]
+output = tanh(activation[OUTPUT])
+```
+
+**CTRNN**: Continuous-Time Recurrent Neural Network with per-neuron time constants. Euler integration (dt=1):
+```
+x_i(t+1) = x_i(t) + (1/tau_i) * (-x_i(t) + sum_j w_ij * tanh(x_j(t)) + I_i(t) + b_i)
+output = tanh(x_output)
+```
+- Time constants (`tau`) evolved per neuron, range `[tau_min, tau_max]`
+- Higher tau = slower dynamics, lower tau = faster response
+- Adds 3 time constant parameters (one per neuron)
+
+## Genotype Modes (`genotype_mode`)
+
+### Binary (default)
+- **SIMPLE**: 81 bits (9 connections × 7 bits + 3 biases × 6 bits)
+- **CTRNN**: 96 bits (81 + 3 time constants × 5 bits each)
+- Genetic operators: two-point crossover + per-bit point mutation
+
+### Continuous
+- **SIMPLE**: 24 floats (9 weights + 3 biases + 12 learnable values)
+- **CTRNN**: 27 floats (24 + 3 time constants)
+- Weights/biases: direct float values clipped to `[-max_weight, max_weight]`
+- Learnable values: thresholded at 0.5 → boolean mask
+- Genetic operators: uniform crossover + Gaussian mutation (`mutation_std`)
 
 ## Two-Phase Evaluation
 
@@ -49,27 +78,36 @@ Prevents evolutionary dead end where all random agents die:
 ## Tournament Selection
 
 N tournaments per generation (N = pop_size):
-1. Pick 2 random distinct individuals
-2. Winner = higher fitness
+1. Pick `tournament_size` random individuals (configurable, default 2)
+2. Winner = highest fitness, loser = lowest fitness
 3. With probability `crossover_rate`: replace loser with crossover(winner, loser) + mutation
 4. Otherwise: replace loser with copy(winner) + mutation
 
-Fitness scores held constant during all N tournaments (not updated mid-generation).
+Larger `tournament_size` increases selection pressure. Fitness scores held constant during all N tournaments (not updated mid-generation).
 
 ## Key Modules
 
 | File | Purpose |
 |------|---------|
-| `config.py` | 7 dataclasses (Env, Network, Pain, Health, Learning, Genetic, Simulation) |
-| `network.py` | 3-neuron RNN with 9 connections, Hebbian learning via `lax.scan` |
-| `genetics.py` | 81-bit genotype, diversity/learnable analysis functions |
+| `config.py` | 7 dataclasses + enums (`NetworkMode`, `GenotypeMode`, `HebbianRule`, `WeightSpacing`) |
+| `network.py` | 3-neuron RNN (SIMPLE/CTRNN modes), Hebbian learning via `lax.scan` |
+| `genetics.py` | Binary (81/96 bit) and continuous (24/27 float) genotype encoding/decoding |
 | `environment.py` | Clumpy threats, true/false assignment, delayed pain generation |
 | `health.py` | Health dynamics with death, `lax.scan` simulation |
 | `evaluation.py` | Two-phase pipeline, `PopulationEvalSummary`, `AgentTrace` |
-| `selection.py` | Tournament selection via `lax.scan` |
+| `selection.py` | Tournament selection (binary/continuous dispatch) via `lax.scan` |
 | `simulation.py` | Main loop with checkpoint traces and per-gen statistics |
 | `io.py` | Structured save/load for `runs/` folder hierarchy |
-| `viz/` | 16 visualization types (see alice-visualization.md) |
+| `viz/` | 18 visualization types (see alice-visualization.md) |
+
+## Configuration Enums
+
+| Enum | Values | Config field |
+|------|--------|-------------|
+| `NetworkMode` | `simple`, `ctrnn` | `network.network_mode` |
+| `GenotypeMode` | `binary`, `continuous` | `genetic.genotype_mode` |
+| `HebbianRule` | `basic`, `oja`, `normalized` | `learning.rule` |
+| `WeightSpacing` | `linear`, `logarithmic` | `network.weight_spacing` |
 
 ## Data Collection
 
@@ -83,4 +121,16 @@ Checkpoint traces (~10 per run): full behavioral data for best agent at interval
 cd habituation_experiment_ALICE
 python scripts/run_experiment.py --config config/default.yaml --name my_exp
 python scripts/gen_all_viz.py runs/<experiment_dir>/
+```
+
+### Example: CTRNN + Continuous genotype
+```yaml
+network:
+  network_mode: ctrnn
+  tau_min: 0.5
+  tau_max: 10.0
+genetic:
+  genotype_mode: continuous
+  mutation_std: 0.1
+  tournament_size: 3
 ```

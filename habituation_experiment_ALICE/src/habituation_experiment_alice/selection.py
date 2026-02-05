@@ -1,8 +1,9 @@
 """Tournament selection for the ALICE threat discrimination simulation.
 
 Implements N-tournament selection where N = population size:
-- Each tournament selects two random distinct individuals
-- The higher-fitness individual is the winner
+- Each tournament selects tournament_size random individuals
+- The highest-fitness individual is the winner
+- The lowest-fitness individual is the loser
 - The loser is replaced by either:
   - A copy of the winner (probability = 1 - crossover_rate)
   - crossover(winner, loser) (probability = crossover_rate)
@@ -18,62 +19,121 @@ import jax.numpy as jnp
 from jax import Array
 from jax.random import PRNGKey
 
-from .config import GeneticConfig
-from .genetics import point_mutation, two_point_crossover
+from .config import GeneticConfig, GenotypeMode, NetworkConfig
+from .genetics import (
+    gaussian_mutation,
+    point_mutation,
+    two_point_crossover,
+    uniform_crossover,
+)
 
 
-def single_tournament(
+def _binary_tournament_ops(
+    key_cross: PRNGKey,
+    key_mutate: PRNGKey,
+    winner_genotype: Array,
+    loser_genotype: Array,
+    do_crossover: Array,
+    mutation_rate: float,
+    **kwargs,
+) -> Array:
+    """Apply binary genetic operators: two-point crossover + point mutation."""
+    offspring, _ = two_point_crossover(key_cross, winner_genotype, loser_genotype)
+    replacement = jnp.where(do_crossover, offspring, winner_genotype)
+    replacement = point_mutation(key_mutate, replacement, mutation_rate)
+    return replacement
+
+
+def _continuous_tournament_ops(
+    key_cross: PRNGKey,
+    key_mutate: PRNGKey,
+    winner_genotype: Array,
+    loser_genotype: Array,
+    do_crossover: Array,
+    mutation_rate: float,
+    mutation_std: float,
+    net_config: NetworkConfig,
+) -> Array:
+    """Apply continuous genetic operators: uniform crossover + Gaussian mutation."""
+    offspring, _ = uniform_crossover(key_cross, winner_genotype, loser_genotype)
+    replacement = jnp.where(do_crossover, offspring, winner_genotype)
+    replacement = gaussian_mutation(key_mutate, replacement, mutation_rate, mutation_std, net_config)
+    return replacement
+
+
+def single_tournament_binary(
     key: PRNGKey,
     population: Array,
     fitness_scores: Array,
     crossover_rate: float,
     mutation_rate: float,
+    tournament_size: int = 2,
 ) -> Array:
-    """Execute a single tournament between two random individuals.
-
-    Args:
-        key: JAX random key
-        population: Current population, shape (pop_size, genotype_length)
-        fitness_scores: ORIGINAL fitness scores, shape (pop_size,)
-        crossover_rate: Probability of crossover vs copying winner
-        mutation_rate: Per-bit mutation rate
-
-    Returns:
-        Updated population with loser replaced
-    """
-    key_pair, key_offset, key_cross_choice, key_cross, key_mutate = jax.random.split(key, 5)
+    """Execute a single tournament with binary genetic operators."""
+    key_select, key_cross_choice, key_cross, key_mutate = jax.random.split(key, 4)
 
     pop_size = population.shape[0]
+    candidate_indices = jax.random.randint(
+        key_select, (tournament_size,), 0, pop_size
+    )
+    candidate_fitness = fitness_scores[candidate_indices]
 
-    # Select two random distinct indices
-    idx1 = jax.random.randint(key_pair, (), 0, pop_size)
-    offset = jax.random.randint(key_offset, (), 1, pop_size)
-    idx2 = (idx1 + offset) % pop_size
+    winner_pos = jnp.argmax(candidate_fitness)
+    loser_pos = jnp.argmin(candidate_fitness)
+    winner_idx = candidate_indices[winner_pos]
+    loser_idx = candidate_indices[loser_pos]
 
-    fit1 = fitness_scores[idx1]
-    fit2 = fitness_scores[idx2]
-
-    # Determine winner and loser
-    winner_is_1 = fit1 >= fit2
-    winner_idx = jnp.where(winner_is_1, idx1, idx2)
-    loser_idx = jnp.where(winner_is_1, idx2, idx1)
     winner_genotype = population[winner_idx]
     loser_genotype = population[loser_idx]
 
-    # Decide: crossover or copy winner
     do_crossover = jax.random.bernoulli(key_cross_choice, p=crossover_rate)
 
-    # If crossover: crossover(winner, loser), take first offspring
-    offspring, _ = two_point_crossover(key_cross, winner_genotype, loser_genotype)
-    replacement = jnp.where(do_crossover, offspring, winner_genotype)
+    replacement = _binary_tournament_ops(
+        key_cross, key_mutate,
+        winner_genotype, loser_genotype,
+        do_crossover, mutation_rate,
+    )
 
-    # Always apply mutation
-    replacement = point_mutation(key_mutate, replacement, mutation_rate)
+    return population.at[loser_idx].set(replacement)
 
-    # Replace loser with replacement
-    new_population = population.at[loser_idx].set(replacement)
 
-    return new_population
+def single_tournament_continuous(
+    key: PRNGKey,
+    population: Array,
+    fitness_scores: Array,
+    crossover_rate: float,
+    mutation_rate: float,
+    mutation_std: float,
+    net_config: NetworkConfig,
+    tournament_size: int = 2,
+) -> Array:
+    """Execute a single tournament with continuous genetic operators."""
+    key_select, key_cross_choice, key_cross, key_mutate = jax.random.split(key, 4)
+
+    pop_size = population.shape[0]
+    candidate_indices = jax.random.randint(
+        key_select, (tournament_size,), 0, pop_size
+    )
+    candidate_fitness = fitness_scores[candidate_indices]
+
+    winner_pos = jnp.argmax(candidate_fitness)
+    loser_pos = jnp.argmin(candidate_fitness)
+    winner_idx = candidate_indices[winner_pos]
+    loser_idx = candidate_indices[loser_pos]
+
+    winner_genotype = population[winner_idx]
+    loser_genotype = population[loser_idx]
+
+    do_crossover = jax.random.bernoulli(key_cross_choice, p=crossover_rate)
+
+    replacement = _continuous_tournament_ops(
+        key_cross, key_mutate,
+        winner_genotype, loser_genotype,
+        do_crossover, mutation_rate,
+        mutation_std, net_config,
+    )
+
+    return population.at[loser_idx].set(replacement)
 
 
 def create_next_generation_tournament(
@@ -81,6 +141,7 @@ def create_next_generation_tournament(
     population: Array,
     fitness_scores: Array,
     config: GeneticConfig,
+    net_config: NetworkConfig | None = None,
 ) -> Array:
     """Create next generation using N tournament rounds.
 
@@ -93,6 +154,7 @@ def create_next_generation_tournament(
         population: Current population, shape (pop_size, genotype_length)
         fitness_scores: Fitness scores, shape (pop_size,)
         config: Genetic algorithm configuration
+        net_config: Network configuration (required for continuous mode)
 
     Returns:
         New population after all tournaments
@@ -100,15 +162,30 @@ def create_next_generation_tournament(
     pop_size = config.population_size
     keys = jax.random.split(key, pop_size)
 
-    def tournament_step(pop, tournament_key):
-        new_pop = single_tournament(
-            tournament_key,
-            pop,
-            fitness_scores,  # captured from closure - constant for generation
-            config.crossover_rate,
-            config.mutation_rate,
-        )
-        return new_pop, None
+    if config.genotype_mode == GenotypeMode.CONTINUOUS:
+        def tournament_step(pop, tournament_key):
+            new_pop = single_tournament_continuous(
+                tournament_key,
+                pop,
+                fitness_scores,
+                config.crossover_rate,
+                config.mutation_rate,
+                config.mutation_std,
+                net_config,
+                config.tournament_size,
+            )
+            return new_pop, None
+    else:
+        def tournament_step(pop, tournament_key):
+            new_pop = single_tournament_binary(
+                tournament_key,
+                pop,
+                fitness_scores,
+                config.crossover_rate,
+                config.mutation_rate,
+                config.tournament_size,
+            )
+            return new_pop, None
 
     final_pop, _ = jax.lax.scan(tournament_step, population, keys)
     return final_pop

@@ -4,10 +4,11 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from habituation_experiment_alice.config import GeneticConfig
+from habituation_experiment_alice.config import GeneticConfig, NetworkConfig
 from habituation_experiment_alice.selection import (
     create_next_generation_tournament,
-    single_tournament,
+    single_tournament_binary,
+    single_tournament_continuous,
 )
 
 
@@ -16,7 +17,17 @@ class TestSingleTournament:
         key = jax.random.PRNGKey(0)
         pop = jnp.zeros((10, 81), dtype=jnp.int32)
         fitness = jnp.arange(10, dtype=jnp.float32)
-        new_pop = single_tournament(key, pop, fitness, 0.7, 0.01)
+        new_pop = single_tournament_binary(key, pop, fitness, 0.7, 0.01)
+        assert new_pop.shape == pop.shape
+
+    def test_continuous_population_shape_preserved(self):
+        key = jax.random.PRNGKey(0)
+        net_config = NetworkConfig()
+        pop = jax.random.normal(key, (10, 24))
+        fitness = jnp.arange(10, dtype=jnp.float32)
+        new_pop = single_tournament_continuous(
+            key, pop, fitness, 0.7, 0.1, 0.1, net_config
+        )
         assert new_pop.shape == pop.shape
 
 

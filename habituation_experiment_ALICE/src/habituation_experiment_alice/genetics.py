@@ -1,11 +1,11 @@
 """Genetic algorithm components for the ALICE threat discrimination simulation.
 
 This module handles:
-- Genotype encoding/decoding (81 bits for N=1)
+- Genotype encoding/decoding (binary and continuous modes)
 - Genetic operators (crossover, mutation)
 - Population management
 
-Genotype Structure (81 bits for N=1, 3 neurons):
+Binary Genotype Structure (81 bits for N=1, SIMPLE mode):
 - 9 connections x 7 bits each = 63 bits
   - Bit 0: connection present (1) or absent (0)
   - Bit 1: sign (1 = positive, 0 = negative)
@@ -15,6 +15,12 @@ Genotype Structure (81 bits for N=1, 3 neurons):
   - Bit 0: sign (1 = positive, 0 = negative)
   - Bits 1-4: magnitude index (0-15)
   - Bit 5: learnable flag (1 = learnable, 0 = fixed)
+
+CTRNN mode appends 3 time constants x 5 bits each = 15 bits (total 96 bits).
+
+Continuous Genotype Structure (24 floats for N=1, SIMPLE mode):
+- 9 weights + 3 biases + 12 learnable values = 24 floats
+- CTRNN mode appends 3 time constants = 27 floats
 """
 
 import jax
@@ -22,16 +28,17 @@ import jax.numpy as jnp
 from jax import Array
 from jax.random import PRNGKey
 
-from .config import NetworkConfig
+from .config import NetworkConfig, NetworkMode
 from .network import NetworkParams
 
 
 # ============================================================================
-# Genotype Constants
+# Binary Genotype Constants
 # ============================================================================
 
 BITS_PER_CONNECTION = 7
 BITS_PER_BIAS = 6
+BITS_PER_TAU = 5  # 32 levels for time constant encoding
 
 # Bit offsets within connection encoding
 CONN_BIT_PRESENT = 0
@@ -48,16 +55,21 @@ BIAS_BIT_LEARNABLE = 5
 
 
 def compute_genotype_length(config: NetworkConfig) -> int:
-    """Compute genotype length from network config."""
-    return config.num_connections * BITS_PER_CONNECTION + config.num_biases * BITS_PER_BIAS
+    """Compute binary genotype length from network config."""
+    base = config.num_connections * BITS_PER_CONNECTION + config.num_biases * BITS_PER_BIAS
+    if config.network_mode == NetworkMode.CTRNN:
+        base += config.num_neurons * BITS_PER_TAU
+    return base
 
 
-# Default for N=1: 9*7 + 3*6 = 63 + 18 = 81
+# Default for N=1 SIMPLE: 9*7 + 3*6 = 63 + 18 = 81
 GENOTYPE_LENGTH_N1 = 81
+# Default for N=1 CTRNN: 81 + 3*5 = 96
+CTRNN_GENOTYPE_LENGTH_N1 = 96
 
 
 # ============================================================================
-# Genotype Creation
+# Binary Genotype Creation
 # ============================================================================
 
 
@@ -75,7 +87,7 @@ def create_random_population(
 
 
 # ============================================================================
-# Genotype Decoding
+# Binary Genotype Decoding
 # ============================================================================
 
 
@@ -120,13 +132,25 @@ def decode_bias(bias_bits: Array, config: NetworkConfig) -> tuple[Array, Array]:
     return bias, learnable.astype(jnp.bool_)
 
 
+def decode_tau(tau_bits: Array, config: NetworkConfig) -> Array:
+    """Decode time constant bits to tau value.
+
+    Maps a BITS_PER_TAU-bit integer linearly to [tau_min, tau_max].
+    """
+    index = bits_to_int(tau_bits)
+    n_values = 2 ** BITS_PER_TAU - 1  # max index
+    frac = index / jnp.maximum(n_values, 1)
+    return config.tau_min + frac * (config.tau_max - config.tau_min)
+
+
 def decode_genotype(genotype: Array, config: NetworkConfig) -> NetworkParams:
     """Convert binary genotype to network parameters.
 
-    For N=1: 9 connections (7 bits each) + 3 biases (6 bits each) = 81 bits.
+    For N=1 SIMPLE: 9 connections (7 bits each) + 3 biases (6 bits each) = 81 bits.
+    For N=1 CTRNN: 81 + 3 time constants (5 bits each) = 96 bits.
 
     Returns:
-        NetworkParams with decoded weights, biases, and learnable mask
+        NetworkParams with decoded weights, biases, learnable mask, and time constants
     """
     num_conns = config.num_connections
     num_biases = config.num_biases
@@ -152,10 +176,23 @@ def decode_genotype(genotype: Array, config: NetworkConfig) -> NetworkParams:
         learnable_mask.append(learnable)
         offset += BITS_PER_BIAS
 
+    # Decode time constants (CTRNN only)
+    if config.network_mode == NetworkMode.CTRNN:
+        taus = []
+        for i in range(config.num_neurons):
+            tau_bits = genotype[offset : offset + BITS_PER_TAU]
+            tau = decode_tau(tau_bits, config)
+            taus.append(tau)
+            offset += BITS_PER_TAU
+        time_constants = jnp.array(taus)
+    else:
+        time_constants = jnp.ones(config.num_neurons)
+
     return NetworkParams(
         weights=jnp.array(weights),
         biases=jnp.array(biases),
         learnable_mask=jnp.array(learnable_mask),
+        time_constants=time_constants,
     )
 
 
@@ -165,7 +202,7 @@ def decode_population(population: Array, config: NetworkConfig) -> NetworkParams
 
 
 # ============================================================================
-# Genotype Encoding (for testing/analysis)
+# Binary Genotype Encoding (for testing/analysis)
 # ============================================================================
 
 
@@ -210,6 +247,15 @@ def encode_bias(bias: float, learnable: bool, config: NetworkConfig) -> Array:
     return bits
 
 
+def encode_tau(tau_value: float, config: NetworkConfig) -> Array:
+    """Encode time constant value to bits."""
+    n_values = 2 ** BITS_PER_TAU - 1
+    frac = (tau_value - config.tau_min) / max(config.tau_max - config.tau_min, 1e-8)
+    frac = max(0.0, min(1.0, frac))
+    index = int(round(frac * n_values))
+    return int_to_bits(index, BITS_PER_TAU)
+
+
 def encode_genotype(params: NetworkParams, config: NetworkConfig) -> Array:
     """Convert network parameters back to genotype."""
     num_conns = config.num_connections
@@ -227,11 +273,16 @@ def encode_genotype(params: NetworkParams, config: NetworkConfig) -> Array:
         )
         parts.append(bias_bits)
 
+    if config.network_mode == NetworkMode.CTRNN:
+        for i in range(config.num_neurons):
+            tau_bits = encode_tau(float(params.time_constants[i]), config)
+            parts.append(tau_bits)
+
     return jnp.concatenate(parts)
 
 
 # ============================================================================
-# Genetic Operators
+# Genetic Operators (Binary)
 # ============================================================================
 
 
@@ -264,12 +315,142 @@ def point_mutation(key: PRNGKey, genotype: Array, rate: float) -> Array:
 
 
 # ============================================================================
+# Genetic Operators (Continuous)
+# ============================================================================
+
+
+def uniform_crossover(
+    key: PRNGKey, parent1: Array, parent2: Array
+) -> tuple[Array, Array]:
+    """Uniform crossover for continuous genotypes.
+
+    Each gene is independently selected from either parent with p=0.5.
+    """
+    mask = jax.random.bernoulli(key, p=0.5, shape=parent1.shape)
+    offspring1 = jnp.where(mask, parent1, parent2)
+    offspring2 = jnp.where(mask, parent2, parent1)
+    return offspring1, offspring2
+
+
+def gaussian_mutation(
+    key: PRNGKey, genotype: Array, rate: float, std: float, config: NetworkConfig
+) -> Array:
+    """Apply Gaussian mutation to continuous genotype.
+
+    Each gene is perturbed with probability `rate` by adding N(0, std) noise.
+    Results are clipped to valid ranges.
+    """
+    k1, k2 = jax.random.split(key)
+    mutate_mask = jax.random.bernoulli(k1, p=rate, shape=genotype.shape)
+    noise = jax.random.normal(k2, shape=genotype.shape) * std
+    mutated = jnp.where(mutate_mask, genotype + noise, genotype)
+
+    # Clip weights and biases to [-max_weight, max_weight]
+    n_wb = config.num_connections + config.num_biases
+    n_params = config.num_params  # connections + biases = learnable mask length
+    wb = jnp.clip(mutated[:n_wb], -config.max_weight, config.max_weight)
+    # Clip learnable values to [0, 1]
+    learn = jnp.clip(mutated[n_wb:n_wb + n_params], 0.0, 1.0)
+
+    parts = [wb, learn]
+
+    # Clip time constants if CTRNN
+    if config.network_mode == NetworkMode.CTRNN:
+        tau_start = n_wb + n_params
+        taus = jnp.clip(mutated[tau_start:tau_start + config.num_neurons],
+                        config.tau_min, config.tau_max)
+        parts.append(taus)
+
+    return jnp.concatenate(parts)
+
+
+# ============================================================================
+# Continuous Genotype Creation & Decoding
+# ============================================================================
+
+
+def compute_continuous_genotype_length(config: NetworkConfig) -> int:
+    """Compute continuous genotype length from network config."""
+    base = config.num_connections + config.num_biases + config.num_params
+    if config.network_mode == NetworkMode.CTRNN:
+        base += config.num_neurons
+    return base
+
+
+def create_random_continuous_genotype(key: PRNGKey, config: NetworkConfig) -> Array:
+    """Generate a random continuous genotype.
+
+    Layout: [weights, biases, learnable_values, (time_constants if CTRNN)]
+    """
+    k1, k2, k3, k4 = jax.random.split(key, 4)
+    weights = jax.random.uniform(
+        k1, (config.num_connections,),
+        minval=-config.max_weight, maxval=config.max_weight,
+    )
+    biases = jax.random.uniform(
+        k2, (config.num_biases,),
+        minval=-config.max_weight, maxval=config.max_weight,
+    )
+    learnable = jax.random.uniform(k3, (config.num_params,))
+
+    parts = [weights, biases, learnable]
+
+    if config.network_mode == NetworkMode.CTRNN:
+        taus = jax.random.uniform(
+            k4, (config.num_neurons,),
+            minval=config.tau_min, maxval=config.tau_max,
+        )
+        parts.append(taus)
+
+    return jnp.concatenate(parts)
+
+
+def create_random_continuous_population(
+    key: PRNGKey, pop_size: int, config: NetworkConfig
+) -> Array:
+    """Generate a population of random continuous genotypes."""
+    keys = jax.random.split(key, pop_size)
+    return jax.vmap(lambda k: create_random_continuous_genotype(k, config))(keys)
+
+
+def decode_continuous_genotype(genotype: Array, config: NetworkConfig) -> NetworkParams:
+    """Convert continuous genotype to network parameters.
+
+    Trivial slicing: weights, biases, learnable (threshold at 0.5), time constants.
+    """
+    n_conns = config.num_connections
+    n_bias = config.num_biases
+    n_params = config.num_params
+
+    weights = jnp.clip(genotype[:n_conns], -config.max_weight, config.max_weight)
+    biases = jnp.clip(genotype[n_conns:n_conns + n_bias], -config.max_weight, config.max_weight)
+    learnable_raw = genotype[n_conns + n_bias:n_conns + n_bias + n_params]
+    learnable_mask = learnable_raw >= 0.5
+
+    if config.network_mode == NetworkMode.CTRNN:
+        tau_start = n_conns + n_bias + n_params
+        time_constants = jnp.clip(
+            genotype[tau_start:tau_start + config.num_neurons],
+            config.tau_min, config.tau_max,
+        )
+    else:
+        time_constants = jnp.ones(config.num_neurons)
+
+    return NetworkParams(
+        weights=weights,
+        biases=biases,
+        learnable_mask=learnable_mask,
+        time_constants=time_constants,
+    )
+
+
+# ============================================================================
 # Population Analysis
 # ============================================================================
 
 
 def compute_genotype_diversity(population: Array) -> float:
-    """Compute mean pairwise normalized Hamming distance.
+    """Compute mean pairwise normalized Hamming distance (for binary genotypes).
 
     Returns a value in [0, 1] where 0 = all identical, 0.5 = random.
     """
@@ -290,10 +471,31 @@ def compute_genotype_diversity(population: Array) -> float:
     return float(mean_distance)
 
 
+def compute_continuous_diversity(population: Array) -> float:
+    """Compute mean pairwise L2 distance normalized by genotype length.
+
+    For continuous genotypes.
+    """
+    import numpy as np
+
+    pop_np = np.array(population)
+    pop_size, geno_len = pop_np.shape
+    if pop_size < 2:
+        return 0.0
+
+    # Pairwise L2 distance
+    diffs = pop_np[:, None, :] - pop_np[None, :, :]
+    l2 = np.sqrt(np.sum(diffs ** 2, axis=-1))
+
+    mask = np.triu(np.ones((pop_size, pop_size), dtype=bool), k=1)
+    mean_distance = np.sum(l2[mask]) / np.sum(mask)
+    return float(mean_distance / geno_len)
+
+
 def compute_pop_learnable_fractions(population: Array, config: NetworkConfig) -> "np.ndarray":
     """Compute fraction of population with each parameter set to learnable.
 
-    Returns array of shape (num_params,) with values in [0, 1].
+    For binary genotypes. Returns array of shape (num_params,) with values in [0, 1].
     """
     import numpy as np
 
@@ -314,3 +516,23 @@ def compute_pop_learnable_fractions(population: Array, config: NetworkConfig) ->
         offset += BITS_PER_BIAS
 
     return np.array(fractions)
+
+
+def compute_continuous_pop_learnable_fractions(
+    population: Array, config: NetworkConfig
+) -> "np.ndarray":
+    """Compute fraction of population with each parameter set to learnable.
+
+    For continuous genotypes. Thresholds learnable values at 0.5.
+    """
+    import numpy as np
+
+    pop_np = np.array(population)
+    n_conns = config.num_connections
+    n_bias = config.num_biases
+    n_params = config.num_params
+    learn_start = n_conns + n_bias
+
+    learnable_values = pop_np[:, learn_start:learn_start + n_params]
+    fractions = np.mean(learnable_values >= 0.5, axis=0)
+    return fractions

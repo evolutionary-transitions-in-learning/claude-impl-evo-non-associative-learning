@@ -87,6 +87,9 @@ def _save_agent_trace(path: Path, trace) -> None:
         weights_after_phase2=np.array(trace.weights_after_phase2),
         biases_after_phase2=np.array(trace.biases_after_phase2),
         learnable_mask=np.array(trace.learnable_mask),
+        time_constants_initial=np.array(trace.time_constants_initial),
+        time_constants_after_phase1=np.array(trace.time_constants_after_phase1),
+        time_constants_after_phase2=np.array(trace.time_constants_after_phase2),
         fitness=np.array(float(trace.fitness)),
         survived_phase1=np.array(bool(trace.survived_phase1)),
     )

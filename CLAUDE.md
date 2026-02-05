@@ -1,6 +1,6 @@
 # Project: Evolved Non-Associative Learning
 
-Two separate JAX-based neuroevolution codebases sharing the same framework patterns. Both evolve small recurrent neural networks with Hebbian learning using binary genotype encoding.
+Two separate JAX-based neuroevolution codebases sharing the same framework patterns. Both evolve small recurrent neural networks with Hebbian learning.
 
 ## Codebases
 
@@ -9,7 +9,7 @@ Reproduces results from "Exploring Adaptive Agency III" (Todd & Miller). 2-neuro
 - **Details:** [.claude/docs/habituation-evolution.md](.claude/docs/habituation-evolution.md)
 
 ### `habituation_experiment_ALICE/` — Threat Discrimination (ALICE)
-New experiment design. 3-neuron network with pain channel learns to discriminate true vs false threats via delayed pain signals. Two-phase evaluation + tournament selection.
+New experiment design. 3-neuron network with pain channel learns to discriminate true vs false threats via delayed pain signals. Two-phase evaluation + tournament selection. Supports multiple network modes (SIMPLE/CTRNN) and genotype encodings (binary/continuous).
 - **Details:** [.claude/docs/alice-experiment.md](.claude/docs/alice-experiment.md)
 
 ## Shared Patterns
@@ -43,11 +43,11 @@ pip install -e ".[dev]" && pytest tests/
 
 | Aspect | habituation_evolution | habituation_experiment_ALICE |
 |--------|----------------------|------------------------------|
-| Network | 2 neurons (S, M) | 3 neurons (S, P, O) |
-| Genotype | 40 bits | 81 bits |
+| Network | 2 neurons (S, M) | 3 neurons (S, P, O); SIMPLE or CTRNN |
+| Genotype | 40 bits (binary) | Binary (81-96 bits) or continuous (24-27 floats) |
 | Inputs | 1 (sensory) | 2 (stimulus + pain) |
 | Fitness | Per-timestep reward/penalty | Health at end of lifetime |
-| Selection | Fitness-proportionate + elitism | Tournament selection |
+| Selection | Fitness-proportionate + elitism | Tournament selection (configurable size) |
 | Evaluation | Single phase | Two-phase (survival + discrimination) |
 | Environment | Food/poison with noise | True/false threats (identical stimulus) |
 | Learning signal | Sensory noise | Delayed pain signal |
@@ -60,7 +60,7 @@ cd habituation_experiment_ALICE
 # Run experiment
 python scripts/run_experiment.py --config config/default.yaml --name my_exp
 
-# Generate all visualizations (16 plot types)
+# Generate all visualizations (18 plot types)
 python scripts/gen_all_viz.py runs/<experiment_dir>/
 ```
 

@@ -15,17 +15,22 @@ import numpy as np
 from jax import Array
 from jax.random import PRNGKey
 
-from .config import SimulationConfig
+from .config import GenotypeMode, SimulationConfig
 from .evaluation import (
     PopulationEvalSummary,
     evaluate_agent_detailed,
     evaluate_population,
 )
 from .genetics import (
+    compute_continuous_diversity,
+    compute_continuous_genotype_length,
+    compute_continuous_pop_learnable_fractions,
     compute_genotype_diversity,
     compute_genotype_length,
     compute_pop_learnable_fractions,
+    create_random_continuous_population,
     create_random_population,
+    decode_continuous_genotype,
     decode_genotype,
 )
 from .selection import create_next_generation_tournament
@@ -117,10 +122,15 @@ def init_simulation(
     """Initialize simulation with random population and evaluate."""
     key_pop, key_eval, key_next = jax.random.split(key, 3)
 
-    genotype_length = compute_genotype_length(config.network)
-    population = create_random_population(
-        key_pop, config.genetic.population_size, genotype_length
-    )
+    if config.genetic.genotype_mode == GenotypeMode.CONTINUOUS:
+        population = create_random_continuous_population(
+            key_pop, config.genetic.population_size, config.network
+        )
+    else:
+        genotype_length = compute_genotype_length(config.network)
+        population = create_random_population(
+            key_pop, config.genetic.population_size, genotype_length
+        )
 
     # Evaluate initial population
     eval_summary = evaluate_population(key_eval, population, config)
@@ -162,7 +172,8 @@ def run_generation(
 
     # Tournament selection
     new_population = create_next_generation_tournament(
-        key_select, state.population, state.fitness_scores, config.genetic
+        key_select, state.population, state.fitness_scores,
+        config.genetic, config.network,
     )
 
     # Evaluate new population
@@ -193,14 +204,27 @@ def run_generation(
 
 def _collect_outside_jit_stats(state, config):
     """Collect statistics that are computed outside JIT (Python-side)."""
+    is_continuous = config.genetic.genotype_mode == GenotypeMode.CONTINUOUS
+
     # Decode best genotype
-    best_params = decode_genotype(state.best_genotype, config.network)
+    if is_continuous:
+        best_params = decode_continuous_genotype(state.best_genotype, config.network)
+    else:
+        best_params = decode_genotype(state.best_genotype, config.network)
 
     # Genotype diversity
-    diversity = compute_genotype_diversity(state.population)
+    if is_continuous:
+        diversity = compute_continuous_diversity(state.population)
+    else:
+        diversity = compute_genotype_diversity(state.population)
 
     # Population learnable fractions
-    pop_learn_frac = compute_pop_learnable_fractions(state.population, config.network)
+    if is_continuous:
+        pop_learn_frac = compute_continuous_pop_learnable_fractions(
+            state.population, config.network
+        )
+    else:
+        pop_learn_frac = compute_pop_learnable_fractions(state.population, config.network)
 
     return {
         "best_weights": np.array(best_params.weights),
