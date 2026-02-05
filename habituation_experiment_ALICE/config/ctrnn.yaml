@@ -14,7 +14,7 @@ network:
   weight_spacing: linear
   network_mode: ctrnn
   tau_min: 0.5
-  tau_max: 10.0
+  tau_max: 2.0  # reduced from 10.0 — fast neurons needed for binary CTRNN
   num_tau_levels: 32
 
 pain:

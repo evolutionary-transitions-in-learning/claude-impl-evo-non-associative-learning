@@ -10,7 +10,7 @@ environment:
 network:
   num_stimulus_channels: 1
   num_weight_magnitudes: 16
-  max_weight: 4.1
+  max_weight: 2.0  # reduced from 4.1 — continuous genotypes need smaller range
   weight_spacing: linear
   network_mode: simple
   tau_min: 0.5
@@ -23,7 +23,7 @@ pain:
 
 health:
   starting_health: 20.0
-  passive_decay: 0.2
+  passive_decay: 0.1  # reduced from 0.2 — gives more time for learning
   eating_gain_rate: 1.0
   threat_damage: 5.0
 
@@ -31,16 +31,16 @@ learning:
   enabled: true
   rule: basic
   learning_rate: 0.01
-  weight_clip: 4.1
+  weight_clip: 2.0
 
 genetic:
   population_size: 100
   max_generations: 2000
-  mutation_rate: 0.05
+  mutation_rate: 0.20  # higher than binary — continuous needs larger exploration
   crossover_rate: 0.7
-  tournament_size: 2
+  tournament_size: 3  # stronger selection pressure
   genotype_mode: continuous
-  mutation_std: 0.1
+  mutation_std: 0.5  # Gaussian noise std
 
 simulation:
   seed: 99

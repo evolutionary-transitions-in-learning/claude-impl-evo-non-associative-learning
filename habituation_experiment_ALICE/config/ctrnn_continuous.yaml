@@ -14,7 +14,7 @@ network:
   weight_spacing: linear
   network_mode: ctrnn
   tau_min: 0.5
-  tau_max: 10.0
+  tau_max: 2.0  # reduced from 10.0 — key finding for CTRNN evolution
   num_tau_levels: 32
 
 pain:
@@ -36,11 +36,11 @@ learning:
 genetic:
   population_size: 100
   max_generations: 2000
-  mutation_rate: 0.05
+  mutation_rate: 0.10  # higher than binary default
   crossover_rate: 0.7
   tournament_size: 2
   genotype_mode: continuous
-  mutation_std: 0.1
+  mutation_std: 1.0  # large Gaussian noise for continuous CTRNN
 
 simulation:
   seed: 99
