@@ -1,67 +1,61 @@
-# Project: Evolved Non-Associative Learning
+# Project: Evolved Habituation & Sensitization (Paper Reproduction)
 
-Two separate JAX-based neuroevolution codebases sharing the same framework patterns. Both evolve small recurrent neural networks with Hebbian learning.
+Reproduces results from "Exploring Adaptive Agency III: Simulating the Evolution of Habituation and Sensitization" by Todd & Miller (2009).
 
-## Codebases
+## Overview
 
-### `habituation_evolution/` — Paper Reproduction
-Reproduces results from "Exploring Adaptive Agency III" (Todd & Miller). 2-neuron network learns food/poison discrimination via sensory noise and habituation.
-- **Details:** [.claude/docs/habituation-evolution.md](.claude/docs/habituation-evolution.md)
+A JAX-based neuroevolution system that evolves 2-neuron recurrent networks with Hebbian learning. Agents learn food/poison discrimination via sensory noise and habituation.
 
-### `habituation_experiment_ALICE/` — Threat Discrimination (ALICE)
-New experiment design. 3-neuron network with pain channel learns to discriminate true vs false threats via delayed pain signals. Two-phase evaluation + tournament selection. Supports multiple network modes (SIMPLE/CTRNN) and genotype encodings (binary/continuous).
-- **Details:** [.claude/docs/alice-experiment.md](.claude/docs/alice-experiment.md)
+- **Details:** [.claude/docs/overview.md](.claude/docs/overview.md)
+- **Framework patterns:** [.claude/docs/shared-patterns.md](.claude/docs/shared-patterns.md)
 
-## Shared Patterns
-Both codebases use the same framework — see [.claude/docs/shared-patterns.md](.claude/docs/shared-patterns.md)
-
-## Project Layout
+## Neural Network
 
 ```
-habituation_paper.pdf/md     # Source paper
-simulation_requirements.md   # Extracted requirements from paper
-coding_plan.md               # Implementation plan for habituation_evolution
-habituation_evolution/       # Paper reproduction codebase
-habituation_experiment_ALICE/ # ALICE experiment codebase (independent)
+Sensory (S) ──forward──> Motor (M)
+    ^                       |
+    └───recurrent───────────┘
 ```
+
+- 2 neurons: Sensory (linear) and Motor (tanh)
+- 4 connections + 2 biases = 6 parameters
+- 40-bit binary genotype encoding
+
+## Key Features
+
+| Aspect | Description |
+|--------|-------------|
+| Inputs | 1 (sensory with noise) |
+| Fitness | Per-timestep reward/penalty |
+| Selection | Fitness-proportionate + elitism |
+| Environment | Food/poison with clumpy structure |
+| Learning signal | Sensory noise |
 
 ## Development
 
-Each codebase has its own `.venv/`, `pyproject.toml`, and test suite. They share no imports — fully independent.
-
 ```bash
-# habituation_evolution
-cd habituation_evolution && python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]" && pytest tests/
-
-# ALICE experiment
-cd habituation_experiment_ALICE && python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]" && pytest tests/
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+pytest tests/
 ```
 
-## Key Differences at a Glance
-
-| Aspect | habituation_evolution | habituation_experiment_ALICE |
-|--------|----------------------|------------------------------|
-| Network | 2 neurons (S, M) | 3 neurons (S, P, O); SIMPLE or CTRNN |
-| Genotype | 40 bits (binary) | Binary (81-96 bits) or continuous (24-27 floats) |
-| Inputs | 1 (sensory) | 2 (stimulus + pain) |
-| Fitness | Per-timestep reward/penalty | Health at end of lifetime |
-| Selection | Fitness-proportionate + elitism | Tournament selection (configurable size) |
-| Evaluation | Single phase | Two-phase (survival + discrimination) |
-| Environment | Food/poison with noise | True/false threats (identical stimulus) |
-| Learning signal | Sensory noise | Delayed pain signal |
-
-## Running Experiments (ALICE)
+## Running Experiments
 
 ```bash
-cd habituation_experiment_ALICE
-
-# Run experiment
-python scripts/run_experiment.py --config config/default.yaml --name my_exp
-
-# Generate all visualizations (18 plot types)
-python scripts/gen_all_viz.py runs/<experiment_dir>/
+python scripts/run_experiment.py --quick --name test_run
+python scripts/run_experiment.py --runs 5 --name paper_reproduction
+python scripts/analyze_results.py data/experiments/paper_reproduction
 ```
 
-See [.claude/docs/alice-visualization.md](.claude/docs/alice-visualization.md) for visualization details.
+## Paper Reproduction Goals
+
+1. **Figure 1**: 3D surface plot (sensory accuracy × clump scale × generations)
+2. **Lifespan hypothesis**: clump-scale 80, 70% accuracy, lifespan 1000 vs 4000
+3. **Network architecture analysis**: which weights enable cluster-tracking
+
+## Reference Files
+
+- `habituation_paper.pdf` / `habituation_paper.md` - Source paper
+- `simulation_requirements.md` - Extracted requirements
+- `coding_plan.md` - Implementation plan
+- `REPRODUCTION_PLAN.md` - Reproduction strategy

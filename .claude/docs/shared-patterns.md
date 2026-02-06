@@ -1,6 +1,6 @@
-# Shared Framework Patterns
+# Framework Patterns
 
-Both codebases use identical patterns. Understanding one transfers to the other.
+Core patterns used throughout the codebase.
 
 ## Binary Genotype Encoding
 
@@ -17,21 +17,7 @@ Each network parameter encoded as bits in a flat integer array:
 - Bits 1-4: magnitude index
 - Bit 5: learnable flag
 
-**Time constant (5 bits, CTRNN mode only):**
-- 32 levels linearly mapped to `[tau_min, tau_max]`
-
 Weight magnitudes: 16 linearly-spaced values from 0.0 to 4.1.
-
-## Continuous Genotype Encoding (ALICE only)
-
-Float array with direct parameter values:
-
-**Layout:** `[weights, biases, learnable_values, (time_constants if CTRNN)]`
-- Weights/biases: float values clipped to `[-max_weight, max_weight]`
-- Learnable values: thresholded at 0.5 to produce boolean mask
-- Time constants (CTRNN): float values clipped to `[tau_min, tau_max]`
-
-Sizes for N=1: SIMPLE = 24 floats, CTRNN = 27 floats.
 
 ## Hebbian Learning (within lifetime)
 
@@ -44,23 +30,17 @@ Weights clipped to [-4.1, 4.1] after each update.
 
 ## JAX Patterns
 
-- **`jax.lax.scan`** for temporal simulation (network steps, health dynamics)
+- **`jax.lax.scan`** for temporal simulation (network steps, fitness accumulation)
 - **`jax.vmap`** for batch population evaluation
 - **`@jax.jit`** on the generation runner for speed
 - **Pure functional** — no mutation, all state passed explicitly
 - **NamedTuples** for all data structures (JIT-compatible)
-- **Python-level dispatch** via `if/else` on config enums in JIT closures (traced at compile time)
 
 ## Genetic Operators
 
-### Binary mode
 - **Two-point crossover**: swap middle segment between two parents
 - **Point mutation**: per-bit flip with configurable rate (default 0.01)
 - Both operate on raw bit arrays (shape-agnostic)
-
-### Continuous mode (ALICE only)
-- **Uniform crossover**: each gene independently selected from either parent (p=0.5)
-- **Gaussian mutation**: perturb each gene with probability `mutation_rate` by adding N(0, `mutation_std`) noise, then clip to valid ranges
 
 ## Configuration
 
@@ -69,7 +49,7 @@ Nested dataclasses with YAML serialization:
 - `from_yaml()`, `to_dict()`, `save_yaml()`, `with_updates()`
 - `with_updates()` supports dotted notation: `config.with_updates(**{"genetic.mutation_rate": 0.05})`
 
-## Project Structure (both follow this)
+## Project Structure
 
 ```
 src/<package_name>/
@@ -85,7 +65,7 @@ config/             # YAML config files
 
 ## Clumpy Environments
 
-Both generate threat/food sequences with configurable clump scale:
+Food/poison sequences generated with configurable clump scale:
 1. Random binary base sequence of length `ceil(lifetime / clump_scale)`
 2. Repeat each element `clump_scale` times
 3. Truncate to exact lifetime

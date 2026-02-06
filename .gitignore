@@ -207,3 +207,4 @@ marimo/_lsp/
 __marimo__/
 habituation_experiment_ALICE/runs/
 habituation_evolution/data/experiments/
+data/experiments/

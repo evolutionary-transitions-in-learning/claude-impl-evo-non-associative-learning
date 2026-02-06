@@ -263,10 +263,10 @@ def encode_connection(
     magnitudes = config.get_weight_magnitudes()
 
     # Determine if connection is present (non-zero weight)
-    present = jnp.abs(weight) > 1e-8
+    present = int(jnp.abs(weight) > 1e-8)
 
     # Determine sign
-    sign = weight >= 0
+    sign = int(weight >= 0)
 
     # Find closest magnitude
     magnitude = jnp.abs(weight)
@@ -274,8 +274,8 @@ def encode_connection(
 
     # Encode to bits
     bits = jnp.zeros(BITS_PER_CONNECTION, dtype=jnp.int32)
-    bits = bits.at[CONN_BIT_PRESENT].set(present.astype(jnp.int32))
-    bits = bits.at[CONN_BIT_SIGN].set(sign.astype(jnp.int32))
+    bits = bits.at[CONN_BIT_PRESENT].set(present)
+    bits = bits.at[CONN_BIT_SIGN].set(sign)
     bits = bits.at[CONN_BITS_MAG_START:CONN_BITS_MAG_END].set(int_to_bits(mag_index, 4))
     bits = bits.at[CONN_BIT_LEARNABLE].set(jnp.array(learnable, dtype=jnp.int32))
 
@@ -296,7 +296,7 @@ def encode_bias(bias: float, learnable: bool, config: NetworkConfig) -> Array:
     magnitudes = config.get_weight_magnitudes()
 
     # Determine sign
-    sign = bias >= 0
+    sign = int(bias >= 0)
 
     # Find closest magnitude
     magnitude = jnp.abs(bias)
@@ -304,7 +304,7 @@ def encode_bias(bias: float, learnable: bool, config: NetworkConfig) -> Array:
 
     # Encode to bits
     bits = jnp.zeros(BITS_PER_BIAS, dtype=jnp.int32)
-    bits = bits.at[BIAS_BIT_SIGN].set(sign.astype(jnp.int32))
+    bits = bits.at[BIAS_BIT_SIGN].set(sign)
     bits = bits.at[BIAS_BITS_MAG_START:BIAS_BITS_MAG_END].set(int_to_bits(mag_index, 4))
     bits = bits.at[BIAS_BIT_LEARNABLE].set(jnp.array(learnable, dtype=jnp.int32))
 
